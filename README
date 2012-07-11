@@ -2,3 +2,5 @@ Recursive-Checksummer
 =====================
 
 Utility to generate or check checksums for all files within a directory tree
+
+NB: Requires Mono/.net 4.0 or higher (due to use of System.Threading.Tasks)
