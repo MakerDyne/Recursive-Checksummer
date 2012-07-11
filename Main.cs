@@ -9,6 +9,8 @@ using System.IO;
 using System.Diagnostics;
 using System.Text;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 
 
 namespace RecursiveChecksummer
@@ -20,12 +22,13 @@ namespace RecursiveChecksummer
 		static string rootdest = null;
 		static string fileWithChecksums;
 		static bool useTemporaryFileWithChecksums = false;
-		static uint numCores = (uint)Environment.ProcessorCount;
+		static int numCores = Environment.ProcessorCount;
 		static StreamWriter fwcWriter;
 		static StreamReader fwcReader;
 		static string tmpdir;
 		static bool tmpdirpExists = true;
 		static ushort programMode = 0;
+		static bool parallelSupport = false;
 
 
 		public static int Main(string[] args)
@@ -162,6 +165,16 @@ namespace RecursiveChecksummer
 				return 1;
 			}
 			File.Delete(testFile);
+			// TODO: Either delete this check of add if(parallelSupport){Parallel.For...createChecksum(..))else{Standard.For} below
+			// Check for parallel.for support (has been problematic)
+			try {
+				Parallel.For((int)0, (int)numCores, i => {
+					parallelSupport = true;
+				}); // end Parallel.For
+			}
+			catch(Exception ex) {
+				Console.WriteLine("WARNING: Parallelisation support not available in this version of Mono, Value of parallelSupport is {0}", parallelSupport);
+			}
 			
 			// DETERMINE IF PROGRAM IS TO RUN IN MODE 1,2 or 3
 			// Determine Mode 1
@@ -224,29 +237,42 @@ namespace RecursiveChecksummer
 				Console.WriteLine(ex.Message);
 				return 1;
 			}
-			
-			Console.WriteLine("Current working directory is {0}", Environment.CurrentDirectory);
-			Console.WriteLine("Source directory is {0}", rootsource);
-			Console.WriteLine("Destination directory is {0}", rootdest);
-			Console.WriteLine("File with checksums is {0}", fileWithChecksums);
-			
+					
 			// PROGRAM EXECUTION
 			// Create list(s) of files to create checksums of...
 			List<string>[] arrayOfSourceFileLists = new List<string>[numCores];
 			if(programMode == 1 || programMode == 2) {
 				for(ushort i=0;i<numCores;i++)
 					arrayOfSourceFileLists[i] = new List<string>();
-				uint counter = 0;
+				int counter = 0;
 				generateSourceFileLists(arrayOfSourceFileLists, rootsource, ref counter);
 				for(ushort i=0;i<numCores;i++)
 					Console.WriteLine("Number of items in file list No.{0} is {1}", i, arrayOfSourceFileLists[i].Count);
 			}
+			try {
+			// Create a parallel for loop to create checksums for all files in the lists
+			Parallel.For((int)0, (int)numCores, i => {
+				foreach(string file in arrayOfSourceFileLists[i]) {
+					createChecksum(rootsource, file);
+				}
+			}); // end Parallel.For
+			}
+			catch(Exception ex) {
+				Console.WriteLine("ERROR: problem running parallel.for loop");
+				Console.WriteLine(ex.Message);
+			}
 			
+			// DEVELOPMENT INFORMATION SUMMARY
+			Console.WriteLine("Current working directory is {0}", Environment.CurrentDirectory);
+			Console.WriteLine("Source directory is {0}", rootsource);
+			Console.WriteLine("Destination directory is {0}", rootdest);
+			Console.WriteLine("File with checksums is {0}", fileWithChecksums);
+			Console.WriteLine("Number of cores requested is {0}", numCores);
 			return 0;
 		}
 		
 		// Function to generate lists of files to be passed to the checksumming program (md5sum) (function used for Mode 1 and 2)
-		static void generateSourceFileLists(List<string>[] fileArray, string currentDir, ref uint counter)
+		static void generateSourceFileLists(List<string>[] fileArray, string currentDir, ref int counter)
 		{
 			// TODO: resolve problem of /proc /sys and other unwelcome directories
 			string[] files = Directory.GetFiles(currentDir);
@@ -278,22 +304,38 @@ namespace RecursiveChecksummer
 
 		static void createChecksum(string workingDir, string file)
 		{
-			string command = "md5sum";
-			Process checksummer = new Process();
-			checksummer.StartInfo.FileName = command;
 			// TODO: change commandArgs, this is just a placeholder
-			string commandArgs = String.Format("{0} {1}", rootdest, rootsource);
-			checksummer.StartInfo.Arguments = commandArgs;
-			checksummer.StartInfo.CreateNoWindow = true;
-			checksummer.StartInfo.WorkingDirectory = workingDir;
-			StreamReader md5sumOutput = checksummer.StandardOutput;
-			checksummer.Start();
-			checksummer.WaitForExit();
-			checksummer.Close();
+			string commandArgs = String.Format("\"{0}\"", file);
+			string command = "md5sum";
 			
-			// TODO: Add md5sumOutput to textfile
+			ProcessStartInfo procSettings = new ProcessStartInfo();
+			procSettings.FileName = command;
+			procSettings.Arguments = commandArgs;
+			procSettings.CreateNoWindow = true;
+			procSettings.UseShellExecute = false;
+			procSettings.WorkingDirectory = workingDir;
+			procSettings.RedirectStandardOutput = true;
+			try {
+				using(Process checksummer = Process.Start(procSettings)) {
+					using(StreamReader checksummerOutput = checksummer.StandardOutput) {
+						// process the output
+						string outputLine;
+						ushort lineCounter = 0;
+						while((outputLine = checksummerOutput.ReadLine()) != null) {
+							++lineCounter;
+							Console.WriteLine("Line {0} of md5sum output is {1}", lineCounter, outputLine);
+						}
+					}
+					// finish up
+					checksummer.WaitForExit();
+					checksummer.Close();
+				}
+			}
+			catch(Exception ex) {
+				Console.WriteLine("ERROR: Problem running md5sum");
+				Console.WriteLine(ex.Message);
+			}
 			
-			md5sumOutput.Close();
 		}
 
 		static void checkChecksum(string file)
