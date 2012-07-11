@@ -8,7 +8,7 @@ using System;
 using System.IO;
 using System.Diagnostics;
 using System.Text;
-using System.Security.AccessControl;
+using System.Collections.Generic;
 
 
 namespace RecursiveChecksummer
@@ -20,7 +20,7 @@ namespace RecursiveChecksummer
 		static string rootdest = null;
 		static string fileWithChecksums;
 		static bool useTemporaryFileWithChecksums = false;
-		static ushort numCores = 0;
+		static uint numCores = (uint)Environment.ProcessorCount;
 		static StreamWriter fwcWriter;
 		static StreamReader fwcReader;
 		static string tmpdir;
@@ -39,7 +39,6 @@ namespace RecursiveChecksummer
 			 * -h = print program usage details and exit
 			 */
 
-Console.WriteLine("Number of command line arguments is " + args.GetLength(0));
 			for(uint i = 0; i < args.GetLength(0); i++)
 			{
 				switch(args[i])
@@ -57,6 +56,7 @@ Console.WriteLine("Number of command line arguments is " + args.GetLength(0));
 						return 1;
 					}
 					rootsource = args[++i];
+					rootsource = rootsource.TrimEnd('/') + '/';
 					if(!rootsource.StartsWith("/"))	// Deal with relative directory paths in the command line args
 						rootsource = Environment.CurrentDirectory + "/" + rootsource;
 					if(!Directory.Exists(rootsource)) {
@@ -177,6 +177,12 @@ Console.WriteLine("Number of command line arguments is " + args.GetLength(0));
 			// Determine Mode 2
 			else if((rootsource != null) && (rootdest != null)) {
 				programMode = 2;
+				// check for identical source and destination directories
+				if(rootsource.TrimEnd('/') == rootdest.TrimEnd('/')) {
+					Console.WriteLine("ERROR: Source (-s) and destination (-d) directories are the same. Please ensure that they are different");
+					printUsageInformation();
+					return 1;
+				}
 				if(fileWithChecksums == null) {
 					useTemporaryFileWithChecksums = true;
 					fileWithChecksums = tmpdir + "fileWithChecksums.txt";
@@ -219,37 +225,58 @@ Console.WriteLine("Number of command line arguments is " + args.GetLength(0));
 				return 1;
 			}
 			
-			// TODO: solve issue of relative directory paths...
 			Console.WriteLine("Current working directory is {0}", Environment.CurrentDirectory);
 			Console.WriteLine("Source directory is {0}", rootsource);
 			Console.WriteLine("Destination directory is {0}", rootdest);
 			Console.WriteLine("File with checksums is {0}", fileWithChecksums);
 			
-			// Run a recursive function on the supplied source directory
-			// processDirectory(rootsource);
-			
+			// PROGRAM EXECUTION
+			// Create list(s) of files to create checksums of...
+			List<string>[] arrayOfSourceFileLists = new List<string>[numCores];
+			if(programMode == 1 || programMode == 2) {
+				for(ushort i=0;i<numCores;i++)
+					arrayOfSourceFileLists[i] = new List<string>();
+				uint counter = 0;
+				generateSourceFileLists(arrayOfSourceFileLists, rootsource, ref counter);
+				for(ushort i=0;i<numCores;i++)
+					Console.WriteLine("Number of items in file list No.{0} is {1}", i, arrayOfSourceFileLists[i].Count);
+			}
 			
 			return 0;
 		}
-
-		static void processDirectory(string directory)
+		
+		// Function to generate lists of files to be passed to the checksumming program (md5sum) (function used for Mode 1 and 2)
+		static void generateSourceFileLists(List<string>[] fileArray, string currentDir, ref uint counter)
 		{
-			// create destination directory first
-			string destdir = directory.Replace(rootsource, rootdest);
-			string[] files = Directory.GetFiles(directory);
-			string[] dirs = Directory.GetDirectories(directory);
+			// TODO: resolve problem of /proc /sys and other unwelcome directories
+			string[] files = Directory.GetFiles(currentDir);
+			string[] dirs = Directory.GetDirectories(currentDir);
+			foreach(string file in files) {
+				fileArray[counter].Add(file.Replace(rootsource,""));
+				++counter;
+				counter = counter%numCores;
+				// ++totalFiles; TODO: could use a static totalFiles variable in place of a counter - this would also provide useful(/useless?) stats
+			}
+			foreach(string dir in dirs)
+				generateSourceFileLists(fileArray, dir, ref counter);
+		}
+
+		static void processDirectory(string workingDir, string processingDir)
+		{
+			string[] files = Directory.GetFiles(processingDir);
+			string[] dirs = Directory.GetDirectories(processingDir);
 			
 			foreach(string file in files) {
-				createChecksum(file);
+				createChecksum(workingDir, file);
 				//total_files++;				
 			}
 			foreach(string dir in dirs) {
-				processDirectory(dir);
+				processDirectory(workingDir, dir);
 				//total_dirs++;
 			}
 		}
 
-		static void createChecksum(string file)
+		static void createChecksum(string workingDir, string file)
 		{
 			string command = "md5sum";
 			Process checksummer = new Process();
@@ -258,8 +285,7 @@ Console.WriteLine("Number of command line arguments is " + args.GetLength(0));
 			string commandArgs = String.Format("{0} {1}", rootdest, rootsource);
 			checksummer.StartInfo.Arguments = commandArgs;
 			checksummer.StartInfo.CreateNoWindow = true;
-			// TODO: change working directory - need md5sum to work from the rootsource directory
-			checksummer.StartInfo.WorkingDirectory = "/home/richard/";
+			checksummer.StartInfo.WorkingDirectory = workingDir;
 			StreamReader md5sumOutput = checksummer.StandardOutput;
 			checksummer.Start();
 			checksummer.WaitForExit();
