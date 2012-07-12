@@ -9,6 +9,7 @@ using System.IO;
 using System.Diagnostics;
 using System.Text;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -29,6 +30,9 @@ namespace RecursiveChecksummer
 		static bool tmpdirpExists = true;
 		static ushort programMode = 0;
 		static bool parallelSupport = false;
+		
+		static ConcurrentBag<string> sourceFileList = new ConcurrentBag<string>();
+		static ConcurrentDictionary<string, string> sourceFileListWithChecksums = new ConcurrentDictionary<string, string>(numCores,1000);
 
 
 		public static int Main(string[] args)
@@ -239,28 +243,29 @@ namespace RecursiveChecksummer
 			}
 					
 			// PROGRAM EXECUTION
-			// Create list(s) of files to create checksums of...
-			List<string>[] arrayOfSourceFileLists = new List<string>[numCores];
+			// Generate list of files to operate on
 			if(programMode == 1 || programMode == 2) {
-				for(ushort i=0;i<numCores;i++)
-					arrayOfSourceFileLists[i] = new List<string>();
 				int counter = 0;
-				generateSourceFileLists(arrayOfSourceFileLists, rootsource, ref counter);
-				for(ushort i=0;i<numCores;i++)
-					Console.WriteLine("Number of items in file list No.{0} is {1}", i, arrayOfSourceFileLists[i].Count);
+				generateSourceFileLists(sourceFileList, rootsource, ref counter);
+				ParallelOptions pOpts = new ParallelOptions();
+				pOpts.MaxDegreeOfParallelism = numCores;
+				Parallel.ForEach(sourceFileList, pOpts, currentFile => {
+					createChecksum(rootsource, currentFile);
+				}); // end Parallel.For
 			}
-			try {
-			// Create a parallel for loop to create checksums for all files in the lists
-			Parallel.For((int)0, (int)numCores, i => {
-				foreach(string file in arrayOfSourceFileLists[i]) {
-					createChecksum(rootsource, file);
-				}
-			}); // end Parallel.For
+			// Temporary, print the concurrentDictionary...
+			foreach(string file in sourceFileListWithChecksums.Keys) {
+				Console.WriteLine("Checksum: {0}, File: {1}", sourceFileListWithChecksums[file], file);
 			}
-			catch(Exception ex) {
-				Console.WriteLine("ERROR: problem running parallel.for loop");
-				Console.WriteLine(ex.Message);
+			
+			// Sort and store the lists to a file
+			
+			if(programMode == 2 || programMode == 3) {
+				// stuff
 			}
+			
+			// TODO: check for (and log) files present in -s but missing in -d
+			// TODO: log errors in the checksum creation and comparison processes
 			
 			// DEVELOPMENT INFORMATION SUMMARY
 			Console.WriteLine("Current working directory is {0}", Environment.CurrentDirectory);
@@ -268,23 +273,25 @@ namespace RecursiveChecksummer
 			Console.WriteLine("Destination directory is {0}", rootdest);
 			Console.WriteLine("File with checksums is {0}", fileWithChecksums);
 			Console.WriteLine("Number of cores requested is {0}", numCores);
+			Console.WriteLine("Number of files in sourceFileList is {0}", sourceFileList.Count);
+			Console.WriteLine("Number of files in sourceFileListWithChecksums is {0}", sourceFileListWithChecksums.Count);
 			return 0;
 		}
 		
 		// Function to generate lists of files to be passed to the checksumming program (md5sum) (function used for Mode 1 and 2)
-		static void generateSourceFileLists(List<string>[] fileArray, string currentDir, ref int counter)
+		static void generateSourceFileLists(ConcurrentBag<string> fileList, string currentDir, ref int counter)
 		{
 			// TODO: resolve problem of /proc /sys and other unwelcome directories
 			string[] files = Directory.GetFiles(currentDir);
 			string[] dirs = Directory.GetDirectories(currentDir);
 			foreach(string file in files) {
-				fileArray[counter].Add(file.Replace(rootsource,""));
+				fileList.Add(file.Replace(rootsource,""));
 				++counter;
 				counter = counter%numCores;
 				// ++totalFiles; TODO: could use a static totalFiles variable in place of a counter - this would also provide useful(/useless?) stats
 			}
 			foreach(string dir in dirs)
-				generateSourceFileLists(fileArray, dir, ref counter);
+				generateSourceFileLists(fileList, dir, ref counter);
 		}
 
 		static void processDirectory(string workingDir, string processingDir)
@@ -319,15 +326,14 @@ namespace RecursiveChecksummer
 				using(Process checksummer = Process.Start(procSettings)) {
 					using(StreamReader checksummerOutput = checksummer.StandardOutput) {
 						// process the output
+						checksummer.WaitForExit();
 						string outputLine;
-						ushort lineCounter = 0;
-						while((outputLine = checksummerOutput.ReadLine()) != null) {
-							++lineCounter;
-							Console.WriteLine("Line {0} of md5sum output is {1}", lineCounter, outputLine);
+						if(checksummer.ExitCode == 0 && (outputLine = checksummerOutput.ReadLine()) != null) {
+							// extract the checksum from the line (successful md5sum output should be 1 line: checksum followed by two spaces and the relative file-path
+							string checksum = outputLine.Remove(outputLine.IndexOf(' '));
+							sourceFileListWithChecksums.AddOrUpdate(file, checksum, (sKey, sVal) => checksum);
 						}
 					}
-					// finish up
-					checksummer.WaitForExit();
 					checksummer.Close();
 				}
 			}
