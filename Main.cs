@@ -19,22 +19,41 @@ namespace RecursiveChecksummer
 	class MainClass
 	{
 		// Source and destination root directories
-		static string rootsource = null;
-		static string rootdest = null;
+		static string rootSource = null;
+		static string rootDest = null;
 		static string fileWithChecksums;
-		static bool useTemporaryFileWithChecksums = false;
+		static bool createFileWithChecksums = false;
 		static int numCores = Environment.ProcessorCount;
 		static StreamWriter fwcWriter;
 		static StreamReader fwcReader;
-		static string tmpdir;
-		static bool tmpdirpExists = true;
+//		static string tmpdir;
+//		static bool tmpdirpExists = true;
 		static ushort programMode = 0;
 		static bool parallelSupport = false;
+		// Source
+		static uint numSourceFiles = 0;
+		static uint numSourceDirs = 0;
+		static ConcurrentBag<string> sourceFilesToProcess = new ConcurrentBag<string>();
+		static ConcurrentDictionary<string, string> sourceFilesWithChecksums = new ConcurrentDictionary<string, string>(numCores,1000);
+		static ConcurrentBag<string> sourceFilesWithoutChecksums = new ConcurrentBag<string>();	// When there's a problem generating a checksum
+		static SortedList<string, string> sortedSourceFilesWithChecksums = new SortedList<string, string>();
+		static SortedSet<string> sortedSourceFilesWithoutChecksums = new SortedSet<string>();
+		// Destination
+		static uint numDestFiles = 0;
+		static uint numDestDirs = 0;
+		static ConcurrentBag<string> destFilesToProcess = new ConcurrentBag<string>();
+		static ConcurrentDictionary<string, string> destFilesWithChecksums = new ConcurrentDictionary<string, string>(numCores,1000);
+		static ConcurrentBag<string> destFilesWithoutChecksums = new ConcurrentBag<string>(); 	// When there's a problem generating a checksum
+		static SortedList<string, string> sortedDestFilesWithChecksums = new SortedList<string, string>();
+		static SortedSet<string> sortedDestFilesWithoutChecksums = new SortedSet<string>();
+		// Difference
+		static ConcurrentBag<string> filesNoMatch = new ConcurrentBag<string>();
+		static ConcurrentBag<string> filesInSourceNotDest = new ConcurrentBag<string>();
+		static ConcurrentBag<string> filesInDestNotSource = new ConcurrentBag<string>();
+		static SortedSet<string> sortedFilesNoMatch = new SortedSet<string>();
+		static SortedSet<string> sortedFilesInSourceNotDest = new SortedSet<string>();
+		static SortedSet<string> sortedFilesInDestNotSource = new SortedSet<string>();
 		
-		static ConcurrentBag<string> sourceFileList = new ConcurrentBag<string>();
-		static ConcurrentDictionary<string, string> sourceFileListWithChecksums = new ConcurrentDictionary<string, string>(numCores,1000);
-
-
 		public static int Main(string[] args)
 		{
 			
@@ -52,7 +71,7 @@ namespace RecursiveChecksummer
 				{
 				case "-s":
 					// signifies that the next CLA will be the root source directory
-					if(rootsource != null) {
+					if(rootSource != null) {
 						Console.WriteLine("ERROR: multiple source (-s) directories have been specified. Please only specify a single source directory");
 						printUsageInformation();
 						return 1;
@@ -62,18 +81,18 @@ namespace RecursiveChecksummer
 						printUsageInformation();
 						return 1;
 					}
-					rootsource = args[++i];
-					rootsource = rootsource.TrimEnd('/') + '/';
-					if(!rootsource.StartsWith("/"))	// Deal with relative directory paths in the command line args
-						rootsource = Environment.CurrentDirectory + "/" + rootsource;
-					if(!Directory.Exists(rootsource)) {
+					rootSource = args[++i];
+					rootSource = rootSource.TrimEnd('/') + '/';
+					if(!rootSource.StartsWith("/"))	// Deal with relative directory paths in the command line args
+						rootSource = Environment.CurrentDirectory + "/" + rootSource;
+					if(!Directory.Exists(rootSource)) {
 						Console.WriteLine("ERROR: Source (-s) directory does not exist!");
 						return 1;
 					}
 					break;
 				case "-d":
 					// signifies that the next CLA will be the root destination directory
-					if(rootdest != null) {
+					if(rootDest != null) {
 						Console.WriteLine("ERROR: multiple destination (-d) directories have been specified. Please only specify a single destination directory");
 						printUsageInformation();
 						return 1;
@@ -83,10 +102,10 @@ namespace RecursiveChecksummer
 						printUsageInformation();
 						return 1;
 					}
-					rootdest = args[++i];
-					if(!rootdest.StartsWith("/"))	// Deal with relative directory paths in the command line args
-						rootdest = Environment.CurrentDirectory + "/" + rootdest;
-					if(!Directory.Exists(rootdest)) {
+					rootDest = args[++i];
+					if(!rootDest.StartsWith("/"))	// Deal with relative directory paths in the command line args
+						rootDest = Environment.CurrentDirectory + "/" + rootDest;
+					if(!Directory.Exists(rootDest)) {
 						Console.WriteLine("ERROR: Destination (-d) directory does not exist!");
 						return 1;
 					}
@@ -94,9 +113,9 @@ namespace RecursiveChecksummer
 				case "-f":
 					/* signifies that the next CLA will be a file containing checksums of files
 					 * MODES OF OPERATION:
-					 * 1. if -s is already specified, -f signifies a non-existant file which is to be created to hold the checksums of all files in rootsource
+					 * 1. if -s is already specified, -f signifies a non-existant file which is to be created to hold the checksums of all files in rootSource
 					 * 2. if -s and -d are both already specified, -f MAY be used to signify a non-existant file which is to be created to hold the checksums of all
-					 *    files in rootsource with will then be checked against all files in destsource. If -f is not specified in this case, a temporary file is created
+					 *    files in rootSource with will then be checked against all files in destsource. If -f is not specified in this case, a temporary file is created
 					 *    for use and deleted before the program closes
 					 * 3. if -d is already specified, -f signifies an existing file which contains the checksums that all files in destsource are to be checked against
 					 * TODO: decide whether to keep the second option
@@ -150,25 +169,6 @@ namespace RecursiveChecksummer
 				Console.WriteLine("ERROR: The program which calculates the checksums (md5sum) either does not exist or cannot be found");
 				return 1;
 			}
-			// Check /tmp or /var/tmp exists and that write permissions are available
-			if(Directory.Exists(@"/tmp/"))
-				tmpdir = @"/tmp/";
-			else if(Directory.Exists(@"/var/tmp/"))
-				tmpdir = @"/var/tmp/";
-			else {
-				Console.WriteLine("ERROR: No temporary directory is available for writing working files to");
-				return 1;
-			}
-			string testFile = tmpdir + "RecursiveChecksummerTestFile.txt";
-			try {
-				File.Create(testFile);
-			}
-			catch(Exception ex) {
-				Console.WriteLine("ERROR: Cannot create temporary working files in {0}", tmpdir);
-				Console.WriteLine(ex.Message);
-				return 1;
-			}
-			File.Delete(testFile);
 			// TODO: Either delete this check of add if(parallelSupport){Parallel.For...createChecksum(..))else{Standard.For} below
 			// Check for parallel.for support (has been problematic)
 			try {
@@ -182,7 +182,7 @@ namespace RecursiveChecksummer
 			
 			// DETERMINE IF PROGRAM IS TO RUN IN MODE 1,2 or 3
 			// Determine Mode 1
-			if((rootsource != null) && (rootdest == null)) {
+			if((rootSource != null) && (rootDest == null)) {
 				if(fileWithChecksums != null)
 					programMode = 1;
 				else {
@@ -192,24 +192,18 @@ namespace RecursiveChecksummer
 				}
 			}
 			// Determine Mode 2
-			else if((rootsource != null) && (rootdest != null)) {
+			else if((rootSource != null) && (rootDest != null)) {
 				programMode = 2;
 				// check for identical source and destination directories
-				if(rootsource.TrimEnd('/') == rootdest.TrimEnd('/')) {
+				if(rootSource.TrimEnd('/') == rootDest.TrimEnd('/')) {
 					Console.WriteLine("ERROR: Source (-s) and destination (-d) directories are the same. Please ensure that they are different");
 					printUsageInformation();
 					return 1;
 				}
-				if(fileWithChecksums == null) {
-					useTemporaryFileWithChecksums = true;
-					fileWithChecksums = tmpdir + "fileWithChecksums.txt";
-					Console.WriteLine("New location for the file with checksums is {0}", fileWithChecksums);
-				}
-				else
-					useTemporaryFileWithChecksums = false;
+				createFileWithChecksums = (fileWithChecksums == null)?false:true;
 			}
 			// Determine Mode 3
-			else if((rootsource == null) && (rootdest != null)) {
+			else if((rootSource == null) && (rootDest != null)) {
 				if(fileWithChecksums != null)
 					programMode = 3;
 				else {
@@ -219,7 +213,7 @@ namespace RecursiveChecksummer
 				}
 			}
 			// Determine insufficient arguments for any mode
-			else if((rootsource == null) && (rootdest == null)) {
+			else if((rootSource == null) && (rootDest == null)) {
 				Console.WriteLine("Error: Neither a source (-s) nor destination (-d) directory has been specified");
 				printUsageInformation();
 				return 1;
@@ -228,7 +222,6 @@ namespace RecursiveChecksummer
 			// Create streams required for modes
 			try {
 				if((programMode == 1) || (programMode == 2))
-					// NB: the streamreader required for the 2nd half of the operation in Mode 2 can only be created later
 					fwcWriter = new StreamWriter(fileWithChecksums, false, Encoding.Default);
 				else if(programMode == 3)
 					fwcReader = new StreamReader(fileWithChecksums, Encoding.Default);
@@ -241,75 +234,191 @@ namespace RecursiveChecksummer
 				Console.WriteLine(ex.Message);
 				return 1;
 			}
+			// Set parallel processing options
+			ParallelOptions pOpts = new ParallelOptions();
+			pOpts.MaxDegreeOfParallelism = numCores;
 					
 			// PROGRAM EXECUTION
-			// Generate list of files to operate on
+			// Generate list of source files to operate on
 			if(programMode == 1 || programMode == 2) {
-				int counter = 0;
-				generateSourceFileLists(sourceFileList, rootsource, ref counter);
-				ParallelOptions pOpts = new ParallelOptions();
-				pOpts.MaxDegreeOfParallelism = numCores;
-				Parallel.ForEach(sourceFileList, pOpts, currentFile => {
-					createChecksum(rootsource, currentFile);
+				generateFileLists(sourceFilesToProcess, rootSource, rootSource, ref numSourceFiles, ref numSourceDirs);
+				Parallel.ForEach(sourceFilesToProcess, pOpts, currentFile => {
+					createChecksum(rootSource, currentFile, sourceFilesWithChecksums, sourceFilesWithoutChecksums);
 				}); // end Parallel.For
+				
+				// Sort and store the list of files with checksums to a file
+				foreach(string file in sourceFilesWithChecksums.Keys) {
+					sortedSourceFilesWithChecksums.Add(file, sourceFilesWithChecksums[file]);
+				}
+				foreach(string file in sourceFilesWithoutChecksums) {
+					sortedSourceFilesWithoutChecksums.Add(file);
+				}
+				if(sortedSourceFilesWithoutChecksums.Count != 0) {
+					Console.WriteLine("ERROR: There were files within the source directory tree for which checksums could not be generated. It is likely the program did not have sufficient privileges to read these files");
+					foreach(string file in sortedSourceFilesWithoutChecksums) {
+						Console.WriteLine("Could not create checksum for: {0}", file);
+					}
+					return 1;
+				}
+				else {
+					if(createFileWithChecksums) {
+						foreach(string file in sortedSourceFilesWithChecksums.Keys) {
+							fwcWriter.WriteLine(string.Format("{0}  {1}", sortedSourceFilesWithChecksums[file], file));  // TODO: do I need to do this in mode 2 if no -f specified?
+						}
+						fwcWriter.Close();
+					}
+				}
 			}
-			// Temporary, print the concurrentDictionary...
-			foreach(string file in sourceFileListWithChecksums.Keys) {
-				Console.WriteLine("Checksum: {0}, File: {1}", sourceFileListWithChecksums[file], file);
+			// TODO: exclude fileWithChecksums.txt from the checksum generation process if it is within the source or dest dir.
+			// TODO: Compare file sizes of source and destination files before computing checksums for them
+			// TODO: Store file sizes as well as checksums in the -f file/ - like cksum outputs: sum size filepath
+			// TODO: Compare speed of md5sum with .NET's own cryptographic functions
+			// TODO: Implement stopwatch
+
+			if(programMode == 3) {
+				// read contents of fileWithChecksums into sourceFilesWithChecksums
+				string line = null;
+				string checksum = null;
+				string file = null;
+				int doubleSpacePos = 0;
+				while((line = fwcReader.ReadLine()) != null) {
+					// extract the checksum from the line (successful md5sum output should be 1 line: checksum followed by two spaces and the relative file-path)
+					checksum = null;
+					file = null;
+					doubleSpacePos = line.IndexOf("  ");
+					if(doubleSpacePos == -1) {
+						Console.WriteLine("ERROR: Problem reading checksums and filenames from {0}. Could not find double whitespace separator between checksum and filename", fileWithChecksums);
+						return 1;
+					}
+					try {
+						checksum = line.Remove(doubleSpacePos);
+						file = line.Substring(line.IndexOf("  ")+2);
+					}
+					catch(ArgumentOutOfRangeException ex) {
+						Console.WriteLine("ERROR: Problem reading checksums and filenames from {0}. Could not separate out checksum and filename", fileWithChecksums);
+						fwcReader.Close();
+						return 1;
+					}
+					if(!destFilesWithChecksums.TryAdd(file, checksum)) {
+						Console.WriteLine("ERROR: Problem parsing the file with checksums {0}, it contains duplicate lines", fileWithChecksums);
+						return 1;
+					}
+				}
 			}
-			
-			// Sort and store the lists to a file
-			
+			// Generate list of destination files to operate on
 			if(programMode == 2 || programMode == 3) {
-				// stuff
+				generateFileLists(destFilesToProcess, rootDest, rootDest, ref numDestFiles, ref numDestDirs);
+				Parallel.ForEach(destFilesToProcess, pOpts, currentFile => {
+					createChecksum(rootDest, currentFile, destFilesWithChecksums, destFilesWithoutChecksums);
+				}); // end Parallel.For
+				
+				// Sort and store the list of files with checksums to a file
+				foreach(string file in destFilesWithChecksums.Keys) {
+					sortedDestFilesWithChecksums.Add(file, destFilesWithChecksums[file]);
+				}
+				foreach(string file in destFilesWithoutChecksums) {
+					sortedDestFilesWithoutChecksums.Add(file);
+				}
+				if(sortedDestFilesWithoutChecksums.Count != 0) {
+					Console.WriteLine("ERROR: There were files within the destination directory tree for which checksums could not be generated. It is likely the program did not have sufficient privileges to read these files");
+					foreach(string file in sortedDestFilesWithoutChecksums) {
+						Console.WriteLine("Could not create checksum for: {0}", file);
+					}
+					return 1;
+				}
 			}
 			
-			// TODO: check for (and log) files present in -s but missing in -d
-			// TODO: log errors in the checksum creation and comparison processes
+			// Compare the source and destination file lists
+			// Find files in both source and destination but which have different checksums
+			foreach(string file in sortedSourceFilesWithChecksums.Keys) {
+				if(sortedDestFilesWithChecksums.ContainsKey(file)) {
+					if(sortedSourceFilesWithChecksums[file] != sortedDestFilesWithChecksums[file])
+						filesNoMatch.Add(file);
+				}
+				else // file is in source but not destination
+					filesInSourceNotDest.Add(file);
+			}
+			// Find files in destination but not source
+			foreach(string file in sortedDestFilesWithChecksums.Keys) {
+				if(!sortedSourceFilesWithChecksums.ContainsKey(file))
+					filesInDestNotSource.Add(file);
+			}
 			
 			// DEVELOPMENT INFORMATION SUMMARY
 			Console.WriteLine("Current working directory is {0}", Environment.CurrentDirectory);
-			Console.WriteLine("Source directory is {0}", rootsource);
-			Console.WriteLine("Destination directory is {0}", rootdest);
+			Console.WriteLine("Source directory is {0}", rootSource);
+			Console.WriteLine("Destination directory is {0}", rootDest);
 			Console.WriteLine("File with checksums is {0}", fileWithChecksums);
 			Console.WriteLine("Number of cores requested is {0}", numCores);
-			Console.WriteLine("Number of files in sourceFileList is {0}", sourceFileList.Count);
-			Console.WriteLine("Number of files in sourceFileListWithChecksums is {0}", sourceFileListWithChecksums.Count);
+			Console.WriteLine("Number of files in sourceFilesToProcess is {0}", sourceFilesToProcess.Count);
+			Console.WriteLine("Number of files in sourceFilesWithChecksums is {0}", sourceFilesWithChecksums.Count);
+			
+			// RESULTS OF COMPARISON
+			Console.WriteLine("Results of source and destination directory comparison:");
+			if(programMode == 1 || programMode == 2) {
+				Console.WriteLine("Source directory: {0}", rootSource);
+				Console.WriteLine("Source contained {0} files in {1} directories", numSourceFiles, numSourceDirs);
+			}
+			if(programMode == 2 || programMode == 3) {
+				Console.WriteLine("Destination directory: {0}", rootDest);
+				Console.WriteLine("Destination contained {0} files in {1} directories", numDestFiles, numDestDirs);
+			}
+			if((filesNoMatch.Count == 0) && (filesInSourceNotDest.Count == 0) && (filesInDestNotSource.Count == 0)) {
+				Console.WriteLine("SUCCESS: No differences found between source and destination directories");
+				return 0;
+			}
+			else {
+				Console.WriteLine("WARNING: The following differences were found between the source and destination directories");
+				if(filesNoMatch.Count != 0) {
+					Console.WriteLine("The following {0} files are different in the source and destination directories", filesNoMatch.Count);
+					foreach(string file in filesNoMatch)
+						Console.WriteLine(file);
+				}
+				if(filesInSourceNotDest.Count != 0) {
+					Console.WriteLine("The following {0} files were present in the source directories but not in the destination trdirectoriesee:", filesInSourceNotDest.Count);
+					foreach(string file in (filesInSourceNotDest))
+						Console.WriteLine(file);
+				}
+				if(filesInDestNotSource.Count != 0) {
+					Console.WriteLine("The following {0} files were present in the destination directories but not in the source directories:", filesInDestNotSource.Count);
+					foreach(string file in (filesInDestNotSource))
+						Console.WriteLine(file);
+				}
+			}
 			return 0;
 		}
 		
 		// Function to generate lists of files to be passed to the checksumming program (md5sum) (function used for Mode 1 and 2)
-		static void generateSourceFileLists(ConcurrentBag<string> fileList, string currentDir, ref int counter)
+		static void generateFileLists(ConcurrentBag<string> fileList, string rootDir, string currentDir, ref uint fileCounter, ref uint dirCounter)
 		{
-			// TODO: resolve problem of /proc /sys and other unwelcome directories
+			// TODO: resolve problem of /proc /sys /dev and other unwelcome directories
 			string[] files = Directory.GetFiles(currentDir);
 			string[] dirs = Directory.GetDirectories(currentDir);
 			foreach(string file in files) {
-				fileList.Add(file.Replace(rootsource,""));
-				++counter;
-				counter = counter%numCores;
-				// ++totalFiles; TODO: could use a static totalFiles variable in place of a counter - this would also provide useful(/useless?) stats
+				fileList.Add(file.Replace(rootDir,""));
+				++fileCounter;
 			}
 			foreach(string dir in dirs)
-				generateSourceFileLists(fileList, dir, ref counter);
+				++dirCounter;
+				generateFileLists(fileList, rootDir, currentDir, ref fileCounter, ref dirCounter);
 		}
 
-		static void processDirectory(string workingDir, string processingDir)
+		static void processDirectory(string workingDir, string processingDir, ConcurrentDictionary<string, string> successList, ConcurrentBag<string> failureList)
 		{
 			string[] files = Directory.GetFiles(processingDir);
 			string[] dirs = Directory.GetDirectories(processingDir);
 			
 			foreach(string file in files) {
-				createChecksum(workingDir, file);
+				createChecksum(workingDir, file, successList, failureList);
 				//total_files++;				
 			}
 			foreach(string dir in dirs) {
-				processDirectory(workingDir, dir);
+				processDirectory(workingDir, dir, successList, failureList);
 				//total_dirs++;
 			}
 		}
 
-		static void createChecksum(string workingDir, string file)
+		static void createChecksum(string workingDir, string file, ConcurrentDictionary<string, string> successList, ConcurrentBag<string> failureList)
 		{
 			// TODO: change commandArgs, this is just a placeholder
 			string commandArgs = String.Format("\"{0}\"", file);
@@ -329,9 +438,12 @@ namespace RecursiveChecksummer
 						checksummer.WaitForExit();
 						string outputLine;
 						if(checksummer.ExitCode == 0 && (outputLine = checksummerOutput.ReadLine()) != null) {
-							// extract the checksum from the line (successful md5sum output should be 1 line: checksum followed by two spaces and the relative file-path
+							// extract the checksum from the line (successful md5sum output should be 1 line: checksum followed by two spaces and the relative file-path)
 							string checksum = outputLine.Remove(outputLine.IndexOf(' '));
-							sourceFileListWithChecksums.AddOrUpdate(file, checksum, (sKey, sVal) => checksum);
+							successList.AddOrUpdate(file, checksum, (sKey, sVal) => checksum); // TODO: decide whether to use AddOrUpdate or Add method, and why?
+						}
+						else {
+							failureList.Add(file);
 						}
 					}
 					checksummer.Close();
