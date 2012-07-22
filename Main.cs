@@ -29,7 +29,7 @@ namespace RecursiveChecksummer
 		static StreamReader fwcReader;
 		static ushort programMode = 0;
 		static bool parallelSupport = false;
-		static bool useDotNetMD5 = true;
+		static bool useDotNetMD5 = false;
 		// Source
 		static uint numSourceFiles = 0;
 		static uint numSourceDirs = 1;
@@ -171,8 +171,9 @@ namespace RecursiveChecksummer
 			// PRE-RUN CHECKS
 			// Check that md5sum exists
 			if(!File.Exists(@"/bin/md5sum")) {
-				Console.WriteLine("ERROR: The program which calculates the checksums (md5sum) either does not exist or cannot be found");
-				return 1;
+				Console.WriteLine("WARNING: The Linux program which calculates the checksums (md5sum) either does not exist or cannot be found");
+				Console.WriteLine("Falling back to using .Net's own checksum generating functions");
+				useDotNetMD5 = true;
 			}
 			// TODO: Either delete this check of add if(parallelSupport){Parallel.For...createChecksum(..))else{Standard.For} below
 			// Check for parallel.for support (has been problematic)
@@ -227,16 +228,17 @@ namespace RecursiveChecksummer
 				return 1;
 			}
 			
-			// Create streams required for modes
+			// Create streams required for modes.
+			// Do not use any encoding options when creating the StreamWriter. The Linux utility md5sum in -c mode needs a file *without* any byte-order mark at the beginning
 			try {
 				switch(programMode) {
 				case 1:
 				case 2:
 					if(createFileWithChecksums)
-						fwcWriter = new StreamWriter(fileWithChecksums, false, Encoding.Default);
+						fwcWriter = new StreamWriter(fileWithChecksums, false);
 					break;
 				case 3:
-					fwcReader = new StreamReader(fileWithChecksums, Encoding.Default);
+					fwcReader = new StreamReader(fileWithChecksums);
 					break;
 				default:
 					Console.WriteLine("ERROR: An unidentified program mode has been selected. programMode = {0}", programMode);
@@ -298,6 +300,9 @@ namespace RecursiveChecksummer
 					doubleSpacePos = line.IndexOf("  ");
 					if(doubleSpacePos == -1) {
 						Console.WriteLine("ERROR: Problem reading checksums and filenames from {0}. Could not find double whitespace separator between checksum and filename", fileWithChecksums);
+						// TODO: decide whether to return 1 or add the offending file to sourceFilesWithoutChecksums
+						// NB: there may not be a filename if there's no double space found...
+						// Try adding the whole line to filesWithoutChecksums, so the user can see the unedited problematic lines
 						return 1;
 					}
 					try {
@@ -309,13 +314,14 @@ namespace RecursiveChecksummer
 						fwcReader.Close();
 						return 1;
 					}
-					if(!sourceFilesWithChecksums.TryAdd(file, checksum)) { // NB: use sourceFiles... to hold the file contents
+					if(!sourceFilesWithChecksums.TryAdd(file, checksum)) { // NB: note the use of *source*FilesWithChecksums to hold the file contents
 						Console.WriteLine("ERROR: Problem parsing the file with checksums {0}, it contains duplicate lines", fileWithChecksums);
 						return 1;
 					}
-					// TODO: sort the files
 				}
 				fwcReader.Close();
+				foreach(string fileWithChecksum in sourceFilesWithChecksums.Keys)
+					sortedSourceFilesWithChecksums.Add(fileWithChecksum, sourceFilesWithChecksums[fileWithChecksum]);
 			}
 			// Generate list of destination files to operate on
 			if(programMode == 2 || programMode == 3) {
@@ -462,11 +468,11 @@ namespace RecursiveChecksummer
 				byte[] checksumArray;
 				string checksum;
 				try {
-					FileStream fileToOpen = new FileStream(workingDir+file, FileMode.Open);
+					FileStream fileToOpen = new FileStream(workingDir+file, FileMode.Open);	// TODO: add option for sequential read
 					MD5 md5 = new MD5CryptoServiceProvider();
 					checksumArray = md5.ComputeHash(fileToOpen);
 					fileToOpen.Close();
-					checksum = (BitConverter.ToString(checksumArray)).ToLower().Replace("-","");
+					checksum = (BitConverter.ToString(checksumArray)).Replace("-","").ToLower();
 					successList.AddOrUpdate(file, checksum, (sKey, sVal) => checksum);
 				}
 				catch(Exception ex) {
@@ -514,16 +520,6 @@ namespace RecursiveChecksummer
 			Console.WriteLine("Recursive Checksummer");
 			Console.WriteLine("Program to generate or check checksums of all files within a directory tree");
 			Console.WriteLine("Usage: ");
-		}
-
-		static bool checkDirExists(string dir)
-		{
-			return true;
-		}
-		
-		static bool checkFileExists(string file)
-		{
-			return true;
 		}
 	}
 }
