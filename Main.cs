@@ -1,7 +1,7 @@
 /*
 Author: Richard Leszczynski
 Email: richard@makerdyne.com
-Website: http://www.makerdyne.com
+Website: http://www.MakerDyne.com
 */
 
 using System;
@@ -19,49 +19,53 @@ namespace RecursiveChecksummer
 {
 	class MainClass
 	{
-		// Source and destination root directories
-		static string rootSource = null;
-		static string rootDest = null;
-		static string fileWithChecksums;
-		static bool createFileWithChecksums = false;
-		static int numCores = Environment.ProcessorCount;
-		static StreamWriter fwcWriter;
-		static StreamReader fwcReader;
-		static ushort programMode = 0;
-		static bool parallelSupport = false;
-		static bool useDotNetMD5 = false;
-		// Source
-		static uint numSourceFiles = 0;
-		static uint numSourceDirs = 1;
-		static ConcurrentBag<string> sourceFilesToProcess = new ConcurrentBag<string>();
-		static ConcurrentDictionary<string, string> sourceFilesWithChecksums = new ConcurrentDictionary<string, string>(numCores,1000);
-		static ConcurrentBag<string> sourceFilesWithoutChecksums = new ConcurrentBag<string>();	// When there's a problem generating a checksum
-		static SortedList<string, string> sortedSourceFilesWithChecksums = new SortedList<string, string>();
-		static SortedSet<string> sortedSourceFilesWithoutChecksums = new SortedSet<string>();
-		// Destination
-		static uint numDestFiles = 0;
-		static uint numDestDirs = 1;
-		static ConcurrentBag<string> destFilesToProcess = new ConcurrentBag<string>();
-		static ConcurrentDictionary<string, string> destFilesWithChecksums = new ConcurrentDictionary<string, string>(numCores,1000);
-		static ConcurrentBag<string> destFilesWithoutChecksums = new ConcurrentBag<string>(); 	// When there's a problem generating a checksum
-		static SortedList<string, string> sortedDestFilesWithChecksums = new SortedList<string, string>();
-		static SortedSet<string> sortedDestFilesWithoutChecksums = new SortedSet<string>();
-		// Difference
-		static ConcurrentBag<string> filesNoMatch = new ConcurrentBag<string>();
-		static ConcurrentBag<string> filesInSourceNotDest = new ConcurrentBag<string>();
-		static ConcurrentBag<string> filesInDestNotSource = new ConcurrentBag<string>();
-		static SortedSet<string> sortedFilesNoMatch = new SortedSet<string>();
-		static SortedSet<string> sortedFilesInSourceNotDest = new SortedSet<string>();
-		static SortedSet<string> sortedFilesInDestNotSource = new SortedSet<string>();
-		
 		public static int Main(string[] args)
 		{
+			// Source and destination root directories
+			string rootSource = null;
+			string rootDest = null;
+			string fileWithChecksums = null;
+			bool createFileWithChecksums = false;
+			int numCores = Environment.ProcessorCount;
+			StreamWriter fwcWriter;
+			StreamReader fwcReader;
+			ushort programMode = 0;
+			bool useDotNetMD5 = false;
+			bool printDebugInfo = false;			
+			// Source
+			Stopwatch sourceTimer = new Stopwatch();
+			uint numSourceFiles = 0;
+			uint numSourceDirs = 1;
+			ConcurrentBag<string> sourceFilesToProcess = new ConcurrentBag<string>();
+			ConcurrentDictionary<string, string> sourceFilesWithChecksums = new ConcurrentDictionary<string, string>(numCores,1000);
+			ConcurrentBag<string> sourceFilesWithoutChecksums = new ConcurrentBag<string>();	// When there's a problem generating a checksum
+			SortedList<string, string> sortedSourceFilesWithChecksums = new SortedList<string, string>();
+			SortedSet<string> sortedSourceFilesWithoutChecksums = new SortedSet<string>();
+			// Destination
+			Stopwatch destTimer = new Stopwatch();
+			uint numDestFiles = 0;
+			uint numDestDirs = 1;
+			ConcurrentBag<string> destFilesToProcess = new ConcurrentBag<string>();
+			ConcurrentDictionary<string, string> destFilesWithChecksums = new ConcurrentDictionary<string, string>(numCores,1000);
+			ConcurrentBag<string> destFilesWithoutChecksums = new ConcurrentBag<string>(); 	// When there's a problem generating a checksum
+			SortedList<string, string> sortedDestFilesWithChecksums = new SortedList<string, string>();
+			SortedSet<string> sortedDestFilesWithoutChecksums = new SortedSet<string>();
+			// Difference
+			ConcurrentBag<string> filesNoMatch = new ConcurrentBag<string>();
+			ConcurrentBag<string> filesInSourceNotDest = new ConcurrentBag<string>();
+			ConcurrentBag<string> filesInDestNotSource = new ConcurrentBag<string>();
+			SortedSet<string> sortedFilesNoMatch = new SortedSet<string>();
+			SortedSet<string> sortedFilesInSourceNotDest = new SortedSet<string>();
+			SortedSet<string> sortedFilesInDestNotSource = new SortedSet<string>();
 			
 			/* PROCESS COMMAND LINE ARGUMENTS
 			 * Command line flags:
 			 * -s = root source directory
 			 * -d = root destination directory
 			 * -f = path to a file containing checksums of a set of files to check
+			 * -c = number of processor cores to use for checksum generation
+			 * -n = use .net's built-in checksum generator instead of Linux's md5sum utility
+			 * -q = print debugging information
 			 * -h = print program usage details and exit
 			 */
 			
@@ -147,15 +151,22 @@ namespace RecursiveChecksummer
 						numCores = Convert.ToUInt16(args[++i]);
 					}
 					catch(Exception ex) {
-						Console.WriteLine("ERROR: Problem with the value specified for the number of cores (-c) argument: {0}", args[i]);
+						Console.WriteLine("ERROR: Problem with the value specified for the number of cores (-c) argument: {0}. Please specify a positive integer value", args[i]);
 						Console.WriteLine(ex.Message);
 						return 1;
 					}
 					if(numCores == 0)
 						numCores=1;
-					else if(numCores > Environment.ProcessorCount) {
-						numCores = (ushort)Environment.ProcessorCount;
+					else if(numCores > 2*numCoresAvailable) {
+						numCores = 2*numCoresAvailable;
 					}
+					break;
+				case "-n":
+					// use .net's built-in checksum generator instead of Linux's md5sum checksum generator
+					useDotNetMD5 = true;
+					break;
+				case "-q":
+					printDebugInfo = true;
 					break;
 				case "-h":
 					// print program usage information and exit
@@ -167,24 +178,12 @@ namespace RecursiveChecksummer
 					return 1;
 				}
 			}
-						
-			// PRE-RUN CHECKS
-			// Check that md5sum exists
+			
+			// Check that Linux's md5sum utility can be found
 			if(!File.Exists(@"/bin/md5sum")) {
-				Console.WriteLine("WARNING: The Linux program which calculates the checksums (md5sum) either does not exist or cannot be found");
-				Console.WriteLine("Falling back to using .Net's own checksum generating functions");
 				useDotNetMD5 = true;
-			}
-			// TODO: Either delete this check of add if(parallelSupport){Parallel.For...createChecksum(..))else{Standard.For} below
-			// Check for parallel.for support (has been problematic)
-			try {
-				Parallel.For((int)0, (int)numCores, i => {
-					parallelSupport = true;
-				}); // end Parallel.For
-			}
-			catch(Exception ex) {
-				Console.WriteLine("WARNING: Parallelisation support not available in this version of Mono, Value of parallelSupport is {0}", parallelSupport);
-				Console.WriteLine(ex.Message);
+				Console.WriteLine("WARNING: The Linux checksum generating program (md5sum) either does not exist or cannot be found");
+				Console.WriteLine("WARNING: Falling back to using .Net's built-in checksum generator");
 			}
 			
 			// DETERMINE IF PROGRAM IS TO RUN IN MODE 1,2 or 3
@@ -229,7 +228,7 @@ namespace RecursiveChecksummer
 			}
 			
 			// Create streams required for modes.
-			// Do not use any encoding options when creating the StreamWriter. The Linux utility md5sum in -c mode needs a file *without* any byte-order mark at the beginning
+			// Do not use any encoding options when creating the StreamWriter. The Linux utility md5sum in -c mode needs a file *without* any byte-order mark inserted at the beginning
 			try {
 				switch(programMode) {
 				case 1:
@@ -259,18 +258,13 @@ namespace RecursiveChecksummer
 			// PROGRAM EXECUTION
 			// Generate list of source files to operate on
 			if(programMode == 1 || programMode == 2) {
-				try {
-					generateFileLists(sourceFilesToProcess, rootSource, rootSource, ref numSourceFiles, ref numSourceDirs);
-				}
-				catch(Exception ex) {
-					Console.WriteLine("ERROR: Exception thrown from within generateFileLists");
-					Console.WriteLine(ex.Message);
-					Console.WriteLine(ex.StackTrace);
-				}
+				generateFileLists(sourceFilesToProcess, rootSource, rootSource, ref numSourceFiles, ref numSourceDirs);
+				sourceTimer.Start();
 				Parallel.ForEach(sourceFilesToProcess, pOpts, currentFile => {
-					createChecksum(rootSource, currentFile, sourceFilesWithChecksums, sourceFilesWithoutChecksums);
+					createChecksum(rootSource, currentFile, sourceFilesWithChecksums, sourceFilesWithoutChecksums, useDotNetMD5);
 				}); // end Parallel.For
-				
+				sourceTimer.Stop();
+
 				// Sort and store the list of files with checksums to a file
 				foreach(string file in sourceFilesWithChecksums.Keys) {
 					sortedSourceFilesWithChecksums.Add(file, sourceFilesWithChecksums[file]);
@@ -326,9 +320,11 @@ namespace RecursiveChecksummer
 			// Generate list of destination files to operate on
 			if(programMode == 2 || programMode == 3) {
 				generateFileLists(destFilesToProcess, rootDest, rootDest, ref numDestFiles, ref numDestDirs);
+				destTimer.Start();
 				Parallel.ForEach(destFilesToProcess, pOpts, currentFile => {
-					createChecksum(rootDest, currentFile, destFilesWithChecksums, destFilesWithoutChecksums);
+					createChecksum(rootDest, currentFile, destFilesWithChecksums, destFilesWithoutChecksums, useDotNetMD5);
 				}); // end Parallel.For
+				destTimer.Stop();
 				
 				// Sort and store the list of files with checksums to a file
 				foreach(string file in destFilesWithChecksums.Keys) {
@@ -371,32 +367,6 @@ namespace RecursiveChecksummer
 					filesInDestNotSource.Add(file);
 			}
 			
-			// DEVELOPMENT INFORMATION SUMMARY
-			Console.WriteLine();
-			Console.WriteLine("File with checksums is {0}", fileWithChecksums);
-			Console.WriteLine("Program mode is {0}", programMode);
-			Console.WriteLine("Number of cores requested is {0}", numCores);
-			Console.WriteLine();
-			Console.WriteLine("Number of files in sourceFilesToProcess is {0}", sourceFilesToProcess.Count);
-			Console.WriteLine("Number of files in sourceFilesWithChecksums is {0}", sourceFilesWithChecksums.Count);
-			Console.WriteLine("Number of files in sourceFilesWithoutChecksums is {0}", sourceFilesWithoutChecksums.Count);
-			Console.WriteLine("Number of files in sortedSourceFilesWithChecksums is {0}", sortedSourceFilesWithChecksums.Count);
-			Console.WriteLine("Number of files in sortedSourceFilesWithoutChecksums is {0}", sortedSourceFilesWithoutChecksums.Count);
-			Console.WriteLine();
-			Console.WriteLine("Number of files in destFilesToProcess is {0}", destFilesToProcess.Count);
-			Console.WriteLine("Number of files in destFilesWithChecksums is {0}", destFilesWithChecksums.Count);
-			Console.WriteLine("Number of files in destFilesWithoutChecksums is {0}", destFilesWithoutChecksums.Count);
-			Console.WriteLine("Number of files in sortedDestFilesWithChecksums is {0}", sortedDestFilesWithChecksums.Count);
-			Console.WriteLine("Number of files in sortedDestFilesWithoutChecksums is {0}", sortedDestFilesWithoutChecksums.Count);
-			Console.WriteLine();
-			Console.WriteLine("Number of files in filesNoMatch is {0}", filesNoMatch.Count);
-			Console.WriteLine("Number of files in filesInSourceNotDest is {0}", filesInSourceNotDest.Count);
-			Console.WriteLine("Number of files in filesInDestNotSource is {0}", filesInDestNotSource.Count);
-			Console.WriteLine("Number of files in sortedFilesNoMatch is {0}", sortedFilesNoMatch.Count);
-			Console.WriteLine("Number of files in sortedFilesInSourceNotDest is {0}", sortedFilesInSourceNotDest.Count);
-			Console.WriteLine("Number of files in sortedFilesInDestNotSource is {0}", sortedFilesInDestNotSource.Count);
-			Console.WriteLine();
-			
 			// TODO: Compare file sizes of source and destination files before computing checksums for them
 			// TODO: Store file sizes as well as checksums in the -f file/ - like cksum outputs: sum size filepath
 			// TODO: Compare speed of md5sum with .NET's own cryptographic functions
@@ -405,19 +375,63 @@ namespace RecursiveChecksummer
 			// 		 Stage of process: generating source/dest file lists, generating source/dest checksums, reading/writing file with checksums, sorting source/dest/match file lists
 			
 			// RESULTS OF COMPARISON
-			Console.WriteLine();
-			Console.WriteLine("------------------------------------------------------------------------------");
+			Console.WriteLine("\n------------------------------------------------------------------------------");
 			Console.WriteLine("RecursiveChecksummer: Results of source and destination directory comparison:");
 			Console.WriteLine("------------------------------------------------------------------------------\n");
+			
+			// TODO: Delete this little duplicate bit once benchmarking is complete
+			Console.WriteLine("Number of processor cores requested is {0}", numCores);
+			if(useDotNetMD5)
+				Console.WriteLine("Using .Net's built-in checksum generator");
+			else
+				Console.WriteLine("Using Linux's md5sum checksum generator");
+			Console.WriteLine();
+			
+			// DEVELOPMENT INFORMATION SUMMARY
+			if(printDebugInfo)
+			{
+				Console.WriteLine();
+				Console.WriteLine("Program mode is {0}", programMode);
+				Console.WriteLine("Number of processor cores requested is {0}", numCores);
+				if(useDotNetMD5)
+					Console.WriteLine("Using .Net's built-in checksum generator");
+				else
+					Console.WriteLine("Using Linux's md5sum checksum generator");
+				Console.WriteLine();
+				Console.WriteLine("Number of files in sourceFilesToProcess is {0}", sourceFilesToProcess.Count);
+				Console.WriteLine("Number of files in sourceFilesWithChecksums is {0}", sourceFilesWithChecksums.Count);
+				Console.WriteLine("Number of files in sourceFilesWithoutChecksums is {0}", sourceFilesWithoutChecksums.Count);
+				Console.WriteLine("Number of files in sortedSourceFilesWithChecksums is {0}", sortedSourceFilesWithChecksums.Count);
+				Console.WriteLine("Number of files in sortedSourceFilesWithoutChecksums is {0}", sortedSourceFilesWithoutChecksums.Count);
+				Console.WriteLine();
+				Console.WriteLine("Number of files in destFilesToProcess is {0}", destFilesToProcess.Count);
+				Console.WriteLine("Number of files in destFilesWithChecksums is {0}", destFilesWithChecksums.Count);
+				Console.WriteLine("Number of files in destFilesWithoutChecksums is {0}", destFilesWithoutChecksums.Count);
+				Console.WriteLine("Number of files in sortedDestFilesWithChecksums is {0}", sortedDestFilesWithChecksums.Count);
+				Console.WriteLine("Number of files in sortedDestFilesWithoutChecksums is {0}", sortedDestFilesWithoutChecksums.Count);
+				Console.WriteLine();
+				Console.WriteLine("Number of files in filesNoMatch is {0}", filesNoMatch.Count);
+				Console.WriteLine("Number of files in filesInSourceNotDest is {0}", filesInSourceNotDest.Count);
+				Console.WriteLine("Number of files in filesInDestNotSource is {0}", filesInDestNotSource.Count);
+				Console.WriteLine("Number of files in sortedFilesNoMatch is {0}", sortedFilesNoMatch.Count);
+				Console.WriteLine("Number of files in sortedFilesInSourceNotDest is {0}", sortedFilesInSourceNotDest.Count);
+				Console.WriteLine("Number of files in sortedFilesInDestNotSource is {0}", sortedFilesInDestNotSource.Count);
+				Console.WriteLine();
+			}
+			
 			if(programMode == 1 || programMode == 2) {
 				if(fileWithChecksums != null)
 					Console.WriteLine("An md5sum -c compatible file holding the checksums of all the files in the source directory has been created at\n{0}\n", fileWithChecksums);
 				Console.WriteLine("Source directory: {0}", rootSource);
-				Console.WriteLine("Source contained {0} files in {1} directories\n", numSourceFiles, numSourceDirs);
+				Console.WriteLine("Source contained {0} files in {1} directories", numSourceFiles, numSourceDirs);
+				Console.WriteLine("Source directory checksums generated in {0} seconds", sourceTimer.Elapsed.TotalSeconds);
+				Console.WriteLine("Source directory checksums generated in {0}:{1}:{2} (h:m:s)\n", sourceTimer.Elapsed.Hours, sourceTimer.Elapsed.Minutes, sourceTimer.Elapsed.Seconds);
 			}
 			if(programMode == 2 || programMode == 3) {
 				Console.WriteLine("Destination directory: {0}", rootDest);
-				Console.WriteLine("Destination contained {0} files in {1} directories\n", numDestFiles, numDestDirs);
+				Console.WriteLine("Destination contained {0} files in {1} directories", numDestFiles, numDestDirs);
+				Console.WriteLine("Destination directory checksums generated in {0} seconds", destTimer.Elapsed.TotalSeconds);
+				Console.WriteLine("Destination directory checksums generated in {0}:{1}:{2} (h:m:s)\n", destTimer.Elapsed.Hours, destTimer.Elapsed.Minutes, destTimer.Elapsed.Seconds);
 				if((filesNoMatch.Count == 0) && (filesInSourceNotDest.Count == 0) && (filesInDestNotSource.Count == 0)) {
 					Console.WriteLine("SUCCESS: No differences found between source and destination directories\n");
 				}
@@ -462,13 +476,13 @@ namespace RecursiveChecksummer
 			}
 		}
 
-		static void createChecksum(string workingDir, string file, ConcurrentDictionary<string, string> successList, ConcurrentBag<string> failureList)
+		static void createChecksum(string workingDir, string file, ConcurrentDictionary<string, string> successList, ConcurrentBag<string> failureList, bool useDotNet)
 		{
-			if(useDotNetMD5) {	// use .Net's own cryptographic functions to generate a checksum
+			if(useDotNet) {	// use .Net's own cryptographic functions to generate a checksum
 				byte[] checksumArray;
 				string checksum;
 				try {
-					FileStream fileToOpen = new FileStream(workingDir+file, FileMode.Open);	// TODO: add option for sequential read
+					FileStream fileToOpen = new FileStream(workingDir+file, FileMode.Open,  FileAccess.Read, FileShare.Read, 4096, FileOptions.SequentialScan);	// TODO: fine-tune buffersize
 					MD5 md5 = new MD5CryptoServiceProvider();
 					checksumArray = md5.ComputeHash(fileToOpen);
 					fileToOpen.Close();
@@ -517,9 +531,32 @@ namespace RecursiveChecksummer
 
 		static void printUsageInformation()
 		{
+			Console.WriteLine("\n------------------------------------------------------------------------------");
 			Console.WriteLine("Recursive Checksummer");
-			Console.WriteLine("Program to generate or check checksums of all files within a directory tree");
-			Console.WriteLine("Usage: ");
+			Console.WriteLine("Program to generate or check MD5 checksums of all files within a directory tree");
+			Console.WriteLine("------------------------------------------------------------------------------\n");
+			Console.WriteLine("Usage Summary:\n");
+			Console.WriteLine("Program runs in one of three modes:\n\n" +
+				"1.) Given a source directory, generates checksums for all files within that directory tree and writes them to a file\n" +
+			    "    Required command line arguments for this mode: -s -f\n\n" +
+				"2.) Given a source and destination directory, compares checksums for all files within the source tree with those in the destination tree.\n" +
+				"    Optionally will also write the checksums for all files within the source directory to a file.\n" +
+			    "    Required command line arguments for this mode: -s -d, Optional: -f\n\n" +
+                "3.) Given a destination directory, checks checksums for all files within that directory against a list provided from a file.\n" +
+				"    Required command line arguments for this mode: -d -f\n\n");
+			Console.WriteLine("Command line argument details:\n\n" +
+				"-s\t/path/to/source/directory\n\n" +
+				"-d\t/path/to/destination/directory\n\n" +
+				"-f\t/path/to/fileWithChecksums.txt - Must be spedified after (-s) and/or (-d).\n" +
+				"\tIf (-s) is specified, checksums will be written to the file. If the file already exists, it will be overwritten without warning.\n" +
+				"\tIf (-d) is specified, checksums will be read from the file.\n" +
+			    "\tIf the file is within either the source or destination directory trees, it will be ignored in the checksumming process.\n\n" +
+			    "-c\t(Optional) Number of processor cores to use when calculating checksums. Specify a positive integer number.\n\n" +
+			    "-n\t(Optional) Use .Net's built-in MD5 checksum generator instead of the Linux utility md5sum.\n" +
+			    "\tIf md5sum cannot be found, program will automatically fall back to using .Net for checksum generation.\n" +
+			    "\t.Net's checksum generator is slower than the md5sum utility.\n\n" +
+			    "-q\t(Optional) Print debugging information in the program output.\n\n" +
+			    "-h\t(Optional) Print program usage information and exit.\n");
 		}
 	}
 }
