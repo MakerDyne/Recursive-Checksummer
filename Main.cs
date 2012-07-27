@@ -180,11 +180,25 @@ namespace RecursiveChecksummer
 			}
 			
 			// Check that Linux's md5sum utility can be found
-			if(!File.Exists(@"/bin/md5sum")) {
-				useDotNetMD5 = true;
-				Console.WriteLine("WARNING: The Linux checksum generating program (md5sum) either does not exist or cannot be found");
-				Console.WriteLine("WARNING: Falling back to using .Net's built-in checksum generator");
+			if(!useDotNetMD5) {
+				using(Process md5check = new Process()) {
+					try {
+						md5check.StartInfo.UseShellExecute = false;
+						md5check.StartInfo.CreateNoWindow = true;
+						md5check.StartInfo.FileName = "md5sum";
+						md5check.StartInfo.Arguments= "--version";
+						md5check.StartInfo.RedirectStandardOutput = true;
+						md5check.Start();
+						md5check.WaitForExit();
+					}
+					catch(Exception ex) {
+						useDotNetMD5 = true;
+						Console.WriteLine("WARNING: The Linux checksum generating program (md5sum) either does not exist or cannot be found");
+						Console.WriteLine("WARNING: Falling back to using .Net's built-in checksum generator");
+					}
+				}
 			}
+			
 			
 			// DETERMINE IF PROGRAM IS TO RUN IN MODE 1,2 or 3
 			// Determine Mode 1
@@ -258,7 +272,7 @@ namespace RecursiveChecksummer
 			// PROGRAM EXECUTION
 			// Generate list of source files to operate on
 			if(programMode == 1 || programMode == 2) {
-				if(generateFileLists(sourceFilesToProcess, rootSource, rootSource, fileWithChecksums, ref numSourceFiles, ref numSourceDirs))
+				if(!generateFileLists(sourceFilesToProcess, rootSource, rootSource, fileWithChecksums, ref numSourceFiles, ref numSourceDirs))
 					return 1;
 				sourceTimer.Start();
 				Parallel.ForEach(sourceFilesToProcess, pOpts, currentFile => {
@@ -281,6 +295,7 @@ namespace RecursiveChecksummer
 					return 1;
 				}
 			}
+			Console.WriteLine("Program Mode is {0}", programMode);
 
 			if(programMode == 3) {
 				// read contents of fileWithChecksums into sourceFilesWithChecksums
@@ -318,9 +333,10 @@ namespace RecursiveChecksummer
 				foreach(string fileWithChecksum in sourceFilesWithChecksums.Keys)
 					sortedSourceFilesWithChecksums.Add(fileWithChecksum, sourceFilesWithChecksums[fileWithChecksum]);
 			}
+			
 			// Generate list of destination files to operate on
 			if(programMode == 2 || programMode == 3) {
-				if(generateFileLists(destFilesToProcess, rootDest, rootDest, fileWithChecksums, ref numDestFiles, ref numDestDirs))
+				if(!generateFileLists(destFilesToProcess, rootDest, rootDest, fileWithChecksums, ref numDestFiles, ref numDestDirs))
 					return 1;
 				destTimer.Start();
 				Parallel.ForEach(destFilesToProcess, pOpts, currentFile => {
@@ -472,14 +488,14 @@ namespace RecursiveChecksummer
 			try {
 				files = Directory.GetFiles(currentDir);
 			}
-			catch (Exception UAex) {
+			catch(Exception UAex) {
 				Console.WriteLine("ERROR: You do not have sufficient permissions to access one or more files in {0}", currentDir);
 				return false;
 			}
 			try {
 				dirs = Directory.GetDirectories(currentDir);
 			}
-			catch (Exception UAex) {
+			catch(Exception UAex) {
 				Console.WriteLine("ERROR: You do not have sufficient permissions to access one or more subdirectories in {0}", currentDir);
 				return false;
 			}
@@ -490,8 +506,9 @@ namespace RecursiveChecksummer
 				}
 			}
 			foreach(string dir in dirs) {
+				if(!generateFileLists(fileList, rootDir, dir, checksumFile, ref fileCounter, ref dirCounter))
+					return false;
 				++dirCounter;
-				generateFileLists(fileList, rootDir, dir, checksumFile, ref fileCounter, ref dirCounter);
 			}
 			return true;
 		}
@@ -529,7 +546,7 @@ namespace RecursiveChecksummer
 					using(Process checksummer = Process.Start(procSettings)) {
 						using(StreamReader checksummerOutput = checksummer.StandardOutput) {
 							// process the output
-							checksummer.WaitForExit();
+							checksummer.WaitForExit();	// TODO: potential deadlock condition here?
 							string outputLine;
 							if(checksummer.ExitCode == 0 && (outputLine = checksummerOutput.ReadLine()) != null) {
 								// extract the checksum from the line (successful md5sum output should be 1 line: checksum followed by two spaces and the relative file-path)
