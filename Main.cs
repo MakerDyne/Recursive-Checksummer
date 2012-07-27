@@ -193,8 +193,11 @@ namespace RecursiveChecksummer
 					}
 					catch(Exception ex) {
 						useDotNetMD5 = true;
-						Console.WriteLine("WARNING: The Linux checksum generating program (md5sum) either does not exist or cannot be found");
-						Console.WriteLine("WARNING: Falling back to using .Net's built-in checksum generator");
+						// Supress warning for Windows, where the lack of md5sum is normal
+						if(Environment.OSVersion.Platform == PlatformID.Unix || Environment.OSVersion.Platform == PlatformID.MacOSX) {
+							Console.WriteLine("WARNING: The Linux checksum generating program (md5sum) either does not exist or cannot be found");
+							Console.WriteLine("WARNING: Falling back to using .Net's built-in checksum generator");
+						}
 					}
 				}
 			}
