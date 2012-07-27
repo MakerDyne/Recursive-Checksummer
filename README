@@ -7,6 +7,7 @@ System Requirements:
 
 Requires Mono/.Net 4.0 or higher
 
+
 Usage Summary:
 
 Program runs in one of three modes:
@@ -42,3 +43,9 @@ Command line argument details:
 -q      (Optional) Print debugging information in the program output.
 
 -h      (Optional) Print program usage information and exit.
+
+
+Things to watch out for:
+
+1. The program follows symbolic links wherever they lead.
+2. Don't feed the program special directories like /dev, /proc or /sys

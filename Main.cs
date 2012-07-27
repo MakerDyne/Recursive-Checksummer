@@ -258,7 +258,8 @@ namespace RecursiveChecksummer
 			// PROGRAM EXECUTION
 			// Generate list of source files to operate on
 			if(programMode == 1 || programMode == 2) {
-				generateFileLists(sourceFilesToProcess, rootSource, rootSource, fileWithChecksums, ref numSourceFiles, ref numSourceDirs);
+				if(generateFileLists(sourceFilesToProcess, rootSource, rootSource, fileWithChecksums, ref numSourceFiles, ref numSourceDirs))
+					return 1;
 				sourceTimer.Start();
 				Parallel.ForEach(sourceFilesToProcess, pOpts, currentFile => {
 					createChecksum(rootSource, currentFile, sourceFilesWithChecksums, sourceFilesWithoutChecksums, useDotNetMD5);
@@ -319,7 +320,8 @@ namespace RecursiveChecksummer
 			}
 			// Generate list of destination files to operate on
 			if(programMode == 2 || programMode == 3) {
-				generateFileLists(destFilesToProcess, rootDest, rootDest, fileWithChecksums, ref numDestFiles, ref numDestDirs);
+				if(generateFileLists(destFilesToProcess, rootDest, rootDest, fileWithChecksums, ref numDestFiles, ref numDestDirs))
+					return 1;
 				destTimer.Start();
 				Parallel.ForEach(destFilesToProcess, pOpts, currentFile => {
 					createChecksum(rootDest, currentFile, destFilesWithChecksums, destFilesWithoutChecksums, useDotNetMD5);
@@ -461,11 +463,26 @@ namespace RecursiveChecksummer
 		}
 		
 		// Function to generate lists of files to be passed to the checksumming program (md5sum) (function used for Mode 1 and 2)
-		private static void generateFileLists(ConcurrentBag<string> fileList, string rootDir, string currentDir, string checksumFile, ref uint fileCounter, ref uint dirCounter)
+		private static bool generateFileLists(ConcurrentBag<string> fileList, string rootDir, string currentDir, string checksumFile, ref uint fileCounter, ref uint dirCounter)
 		{
 			// TODO: resolve problem of /proc /sys /dev and other unwelcome directories
-			string[] files = Directory.GetFiles(currentDir);
-			string[] dirs = Directory.GetDirectories(currentDir);
+			// TODO: resolve insufficient permissions problem
+			string[] files;
+			string[] dirs;
+			try {
+				files = Directory.GetFiles(currentDir);
+			}
+			catch (Exception UAex) {
+				Console.WriteLine("ERROR: You do not have sufficient permissions to access one or more files in {0}", currentDir);
+				return false;
+			}
+			try {
+				dirs = Directory.GetDirectories(currentDir);
+			}
+			catch (Exception UAex) {
+				Console.WriteLine("ERROR: You do not have sufficient permissions to access one or more subdirectories in {0}", currentDir);
+				return false;
+			}
 			foreach(string file in files) {
 				if(file != checksumFile) {
 					fileList.Add(file.Replace(rootDir,""));
@@ -476,6 +493,7 @@ namespace RecursiveChecksummer
 				++dirCounter;
 				generateFileLists(fileList, rootDir, dir, checksumFile, ref fileCounter, ref dirCounter);
 			}
+			return true;
 		}
 
 		private static void createChecksum(string workingDir, string file, ConcurrentDictionary<string, string> successList, ConcurrentBag<string> failureList, bool useDotNet)
