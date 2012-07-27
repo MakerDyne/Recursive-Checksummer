@@ -1,6 +1,44 @@
-Recursive-Checksummer
-=====================
+------------------------------------------------------------------------------
+Recursive Checksummer
+Program to generate or check MD5 checksums of all files within a directory tree
+------------------------------------------------------------------------------
 
-Utility to generate or check checksums for all files within a directory tree
+System Requirements:
 
-NB: Requires Mono/.net 4.0 or higher (due to use of System.Threading.Tasks)
+Requires Mono/.Net 4.0 or higher
+
+Usage Summary:
+
+Program runs in one of three modes:
+
+1.) Given a source directory, generates checksums for all files within that directory tree and writes them to a file
+    Required command line arguments for this mode: -s -f
+
+2.) Given a source and destination directory, compares checksums for all files within the source tree with those in the destination tree.
+    Optionally will also write the checksums for all files within the source directory to a file.
+    Required command line arguments for this mode: -s -d, Optional: -f
+
+3.) Given a destination directory, checks checksums for all files within that directory against a list provided from a file.
+    Required command line arguments for this mode: -d -f
+
+
+Command line argument details:
+
+-s      /path/to/source/directory
+
+-d      /path/to/destination/directory
+
+-f      /path/to/fileWithChecksums.txt - Must be spedified after (-s) and/or (-d).
+        If (-s) is specified, checksums will be written to the file. If the file already exists, it will be overwritten without warning.
+        If (-d) is specified, checksums will be read from the file.
+        If the file is within either the source or destination directory trees, it will be ignored in the checksumming process.
+
+-c      (Optional) Number of processor cores to use when calculating checksums. Specify a positive integer number.
+
+-n      (Optional) Use .Net's built-in MD5 checksum generator instead of the Linux utility md5sum.
+        If md5sum cannot be found, program will automatically fall back to using .Net for checksum generation.
+        .Net's checksum generator is slower than the md5sum utility.
+
+-q      (Optional) Print debugging information in the program output.
+
+-h      (Optional) Print program usage information and exit.
