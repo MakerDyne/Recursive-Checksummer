@@ -17,7 +17,7 @@ using System.Security.Cryptography;
 
 namespace RecursiveChecksummer
 {
-	class MainClass
+	static class MainClass
 	{
 		public static int Main(string[] args)
 		{
@@ -157,8 +157,8 @@ namespace RecursiveChecksummer
 					}
 					if(numCores == 0)
 						numCores=1;
-					else if(numCores > 2*numCoresAvailable) {
-						numCores = 2*numCoresAvailable;
+					else if(numCores > numCoresAvailable) {
+						numCores = numCoresAvailable;
 					}
 					break;
 				case "-n":
@@ -258,7 +258,7 @@ namespace RecursiveChecksummer
 			// PROGRAM EXECUTION
 			// Generate list of source files to operate on
 			if(programMode == 1 || programMode == 2) {
-				generateFileLists(sourceFilesToProcess, rootSource, rootSource, ref numSourceFiles, ref numSourceDirs);
+				generateFileLists(sourceFilesToProcess, rootSource, rootSource, fileWithChecksums, ref numSourceFiles, ref numSourceDirs);
 				sourceTimer.Start();
 				Parallel.ForEach(sourceFilesToProcess, pOpts, currentFile => {
 					createChecksum(rootSource, currentFile, sourceFilesWithChecksums, sourceFilesWithoutChecksums, useDotNetMD5);
@@ -319,7 +319,7 @@ namespace RecursiveChecksummer
 			}
 			// Generate list of destination files to operate on
 			if(programMode == 2 || programMode == 3) {
-				generateFileLists(destFilesToProcess, rootDest, rootDest, ref numDestFiles, ref numDestDirs);
+				generateFileLists(destFilesToProcess, rootDest, rootDest, fileWithChecksums, ref numDestFiles, ref numDestDirs);
 				destTimer.Start();
 				Parallel.ForEach(destFilesToProcess, pOpts, currentFile => {
 					createChecksum(rootDest, currentFile, destFilesWithChecksums, destFilesWithoutChecksums, useDotNetMD5);
@@ -461,22 +461,24 @@ namespace RecursiveChecksummer
 		}
 		
 		// Function to generate lists of files to be passed to the checksumming program (md5sum) (function used for Mode 1 and 2)
-		static void generateFileLists(ConcurrentBag<string> fileList, string rootDir, string currentDir, ref uint fileCounter, ref uint dirCounter)
+		private static void generateFileLists(ConcurrentBag<string> fileList, string rootDir, string currentDir, string checksumFile, ref uint fileCounter, ref uint dirCounter)
 		{
 			// TODO: resolve problem of /proc /sys /dev and other unwelcome directories
 			string[] files = Directory.GetFiles(currentDir);
 			string[] dirs = Directory.GetDirectories(currentDir);
 			foreach(string file in files) {
-				fileList.Add(file.Replace(rootDir,""));
-				++fileCounter;
+				if(file != checksumFile) {
+					fileList.Add(file.Replace(rootDir,""));
+					++fileCounter;
+				}
 			}
 			foreach(string dir in dirs) {
 				++dirCounter;
-				generateFileLists(fileList, rootDir, dir, ref fileCounter, ref dirCounter);
+				generateFileLists(fileList, rootDir, dir, checksumFile, ref fileCounter, ref dirCounter);
 			}
 		}
 
-		static void createChecksum(string workingDir, string file, ConcurrentDictionary<string, string> successList, ConcurrentBag<string> failureList, bool useDotNet)
+		private static void createChecksum(string workingDir, string file, ConcurrentDictionary<string, string> successList, ConcurrentBag<string> failureList, bool useDotNet)
 		{
 			if(useDotNet) {	// use .Net's own cryptographic functions to generate a checksum
 				byte[] checksumArray;
@@ -529,7 +531,7 @@ namespace RecursiveChecksummer
 			}
 		}
 
-		static void printUsageInformation()
+		private static void printUsageInformation()
 		{
 			Console.WriteLine("\n------------------------------------------------------------------------------");
 			Console.WriteLine("Recursive Checksummer");
