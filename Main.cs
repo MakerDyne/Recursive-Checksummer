@@ -27,8 +27,8 @@ namespace RecursiveChecksummer
 			string fileWithChecksums = null;
 			bool createFileWithChecksums = false;
 			int numCores = Environment.ProcessorCount;
-			StreamWriter fwcWriter;
-			StreamReader fwcReader;
+			StreamWriter fwcWriter = null;
+			StreamReader fwcReader = null;
 			ushort programMode = 0;
 			bool useDotNetMD5 = false;
 			bool printDebugInfo = false;			
